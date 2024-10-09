@@ -9,16 +9,34 @@ import sys
 # - decode_bencode(b"5:hello") -> b"hello"
 # - decode_bencode(b"10:hello12345") -> b"hello12345"
 def decode_bencode(bencoded_value):
-    if chr(bencoded_value[0]).isdigit():
-        first_colon_index = bencoded_value.find(b":")
+    if isinstance(bencoded_value, bytes):
+        bencoded_value = bencoded_value.decode('utf-8')
+    
+    if bencoded_value[0].isdigit():
+        # String case: find the colon to determine string length
+        first_colon_index = bencoded_value.find(":")
         if first_colon_index == -1:
             raise ValueError("Invalid encoded value")
-        return bencoded_value[first_colon_index+1:]
-    elif chr(bencoded_value[0])=="i" and chr(bencoded_value[-1]=="e"):
-       return int(bencoded_value[1:-1])
+        length = int(bencoded_value[:first_colon_index])  # Length of the string
+        start_index = first_colon_index + 1
+        end_index = start_index + length
+        return bencoded_value[start_index:end_index], bencoded_value[end_index:]
+    
+    elif bencoded_value[0] == "i" and bencoded_value[-1] == "e":
+        # Integer case
+        return int(bencoded_value[1:-1]), ""
+    
+    elif bencoded_value[0] == "l":
+        # List case
+        result = []
+        bencoded_value = bencoded_value[1:]  # Skip the initial 'l'
+        while bencoded_value[0] != "e":
+            decoded_element, bencoded_value = decode_bencode(bencoded_value)
+            result.append(decoded_element)
+        return result, bencoded_value[1:]  # Skip the closing 'e'
+    
     else:
-        raise NotImplementedError("Only strings are supported at the moment")
-
+        raise NotImplementedError("Unsupported bencoded type")
 
 def main():
     command = sys.argv[1]
