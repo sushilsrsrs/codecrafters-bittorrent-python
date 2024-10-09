@@ -1,7 +1,7 @@
 import json
 import sys
 
- import bencodepy 
+import bencodepy 
 # import requests - available if you need it!
 bc = bencodepy.Bencode(encoding="utf-8")
 # Examples:
