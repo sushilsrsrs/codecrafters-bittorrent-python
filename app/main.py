@@ -78,13 +78,28 @@ def main():
         file_name = sys.argv[2]
         with open(file_name, "rb") as torrent_file:
             bencoded_content = torrent_file.read()
+
+        # Decode the whole torrent
         torrent = decode_bencode(bencoded_content)
-        info_hash=hashlib.sha1(decode_bencode(b"info"))
+
+        # Extract the Bencoded 'info' part from the original bencoded content
+        # Find the position of the 'info' key and its corresponding value
+        info_start = bencoded_content.find(b'd4:info') + 6  # skip over 'd4:info'
+        info_end = bencoded_content.find(b'e', info_start) + 1
+
+        # Get the Bencoded info part (from 'd' to 'e')
+        bencoded_info = bencoded_content[info_start:info_end]
+
+        # Calculate the SHA-1 hash of the Bencoded 'info' section
+        info_hash = hashlib.sha1(bencoded_info).hexdigest()
+
+        # Print the tracker URL, file length, and info hash
         print("Tracker URL:", torrent["announce"].decode())
         print("Length:", torrent["info"]["length"])
-        print(f"Info Hash:{info_hash.hexdigest()}")
+        print(f"Info Hash: {info_hash}")
     else:
         raise NotImplementedError(f"Unknown command {command}")
+
 if __name__ == "__main__":
     main()
 
