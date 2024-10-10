@@ -64,16 +64,12 @@ def main():
     command = sys.argv[1]
     if command == "decode":
         bencoded_value = sys.argv[2].encode()
-        # json.dumps() can't handle bytes, but bencoded "strings" need to be
-        # bytestrings since they might contain non utf-8 characters.
-        #
-        # Let's convert them to strings for printing to the console.
         def bytes_to_str(data):
             if isinstance(data, bytes):
                 return data.decode()
             raise TypeError(f"Type not serializable: {type(data)}")
-        # Uncomment this block to pass the first stage
         print(json.dumps(decode_bencode(bencoded_value), default=bytes_to_str))
+    
     elif command == "info":
         file_name = sys.argv[2]
         with open(file_name, "rb") as torrent_file:
@@ -81,14 +77,16 @@ def main():
 
         # Decode the whole torrent
         torrent = decode_bencode(bencoded_content)
+        
+        # Find the 'info' dictionary directly and grab its Bencoded data
+        info_start = bencoded_content.find(b'4:info') + 6  # After '4:info'
+        if info_start == -1:
+            raise ValueError("Couldn't find 'info' section in the torrent file")
 
-        # Extract the Bencoded 'info' part from the original bencoded content
-        # Find the position of the 'info' key and its corresponding value
-        info_start = bencoded_content.find(b'd4:info') + 6  # skip over 'd4:info'
-        info_end = bencoded_content.find(b'e', info_start) + 1
-
-        # Get the Bencoded info part (from 'd' to 'e')
-        bencoded_info = bencoded_content[info_start:info_end]
+        # Traverse the 'info' part to get its full length
+        # Decode the 'info' part but extract raw bytes simultaneously
+        _, info_end = decode_dict(bencoded_content, info_start - 6)  # Start at 'd'
+        bencoded_info = bencoded_content[info_start-6:info_end]
 
         # Calculate the SHA-1 hash of the Bencoded 'info' section
         info_hash = hashlib.sha1(bencoded_info).hexdigest()
@@ -97,6 +95,7 @@ def main():
         print("Tracker URL:", torrent["announce"].decode())
         print("Length:", torrent["info"]["length"])
         print(f"Info Hash: {info_hash}")
+    
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
