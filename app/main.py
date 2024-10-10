@@ -1,5 +1,6 @@
 import json
 import sys
+import hashlib 
 # import bencodepy - available if you need it!
 # import requests - available if you need it!
 def decode_part(value, start_index):
@@ -78,8 +79,10 @@ def main():
         with open(file_name, "rb") as torrent_file:
             bencoded_content = torrent_file.read()
         torrent = decode_bencode(bencoded_content)
+        info_hash=hashlib.sha1(decode_bencode(b"info"))
         print("Tracker URL:", torrent["announce"].decode())
         print("Length:", torrent["info"]["length"])
+        print(f"Info Hash:{info_hash.hexdigest()}")
     else:
         raise NotImplementedError(f"Unknown command {command}")
 if __name__ == "__main__":
