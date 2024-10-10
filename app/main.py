@@ -2,6 +2,8 @@ import hashlib
 import json
 import sys
 import bencodepy
+import requests 
+import struct 
 # import requests - available if you need it!
 bc = bencodepy.Bencode(encoding="utf-8")
 # Examples:
@@ -34,6 +36,31 @@ def main():
         print("Piece Length:",info_dict[b"info"][b"piece length"])
         for i in range(0, len(info_dict[b"info"][b"pieces"]),20):
             print(info_dict[b"info"][b"pieces"][i:i+20].hex())
+    elif command=="peers":
+        with open(sys.argv[2],"rb") as f:
+            bencoded_value=f.read()
+        torrent_info=decode_bencode(bencoded_value)
+        tracker_url=torrent_info.get("announce","").decode()
+        info_dict=torrent_info.get("info",{})
+        bencoded_info=bytes_to_str(info_dict)
+        info_hash=hashlib.sha1(bencoded_info).digest()
+        params ={
+            "info_hash":info_hash,
+            "peer_id":"00112233445566778899",
+            "port":6881,
+            "uploaded":0,
+            "downloaded":0,
+            "left":torrent_info("info",{}).get("length",0),
+            "compact":1,
+        }
+        response=requests.get(tracker_url,params=params)
+        response_dict=decode_bencode(response.content)
+        peers=response_dict.get("peers","b")
+        for i in range(0,len(peers),6):
+            ip =".".join(str(b) for b in peers[i:i+4])
+            port=struct.unpack("!H",peers[i+4:i+6])[0]
+            print(f"Peer: {ip}:{port}")
+
     else:
         raise NotImplementedError(f"Unknown command {command}")
 if __name__ == "__main__":
