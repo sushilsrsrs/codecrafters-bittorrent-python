@@ -42,7 +42,7 @@ def main():
         torrent_info=decode_bencode(bencoded_value)
         tracker_url=torrent_info.get("announce","").decode()
         info_dict=torrent_info.get("info",{})
-        bencoded_info=bytes_to_str(info_dict)
+        bencoded_info=decode_bencode(info_dict)
         info_hash=hashlib.sha1(bencoded_info).digest()
         params ={
             "info_hash":info_hash,
