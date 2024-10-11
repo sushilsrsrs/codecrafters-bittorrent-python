@@ -1,216 +1,247 @@
 import json
 import sys
-from bencodepy import Bencode  # - available if you need it!
 import hashlib
-import textwrap
-import requests  # - available if you need it!
+import requests
 import socket
 import struct
+import math
 # Examples:
 #
-# - decode_bencode(b"5:hello") -> b"hello"
-# - decode_bencode(b"10:hello12345") -> b"hello12345"
+# - decode_bencode(b"5:hello") -> "hello"
+# - decode_bencode(b"i52e") -> 52
+# - decode_bencode(b"l5:helloi52ee") -> ["hello", 52]
+# - decode_bencode(b"d3:foo3:bar5:helloi52ee") -> {"foo":"bar","hello":52}
 def decode_bencode(bencoded_value):
-    ctrl_char_begin = bencoded_value[0]
-
-    # If it's a string (starts with a number)
-    if chr(ctrl_char_begin).isdigit():
-        # Extract the length of the string before the colon
-        length, rest = bencoded_value.split(b":", 1)
-        length = int(length)  # Convert length to an integer
-        # Return the string portion with the exact length
-        return rest[:length]
-    
-    elif chr(ctrl_char_begin) == "i":
-        # For integer
-        return int(bencoded_value[1:-1])
-    
-    elif chr(ctrl_char_begin) in ("l", "d"):
-        # Use Bencode decoder for lists and dictionaries
-        return Bencode(encoding="utf-8").decode(bencoded_value)
-    
+    first_char = chr(bencoded_value[0])
+    match identify_bencode_type(first_char):
+        case "string":
+            return decode_bencode_string(bencoded_value)
+        case "int":
+            return decode_bencode_int(bencoded_value)
+        case "list":
+            return decode_bencode_list(bencoded_value)
+        case "dict":
+            return decode_bencode_dict(bencoded_value)
+        case _:
+            raise ValueError("Invalid encoded type")
+def identify_bencode_type(first_char):
+    if first_char.isdigit():
+        return "string"
+    elif first_char == "i":
+        return "int"
+    elif first_char == "l":
+        return "list"
+    elif first_char == "d":
+        return "dict"
     else:
-        raise NotImplementedError("This data type is unsupported for now")
-
-def metafile(file):
-    content_decoded = ""
-    with open(file, "rb") as metafile:
-        content = metafile.read()
-        content_decoded = Bencode().decode(content)
-    return content_decoded
-def get_peers(torrent):
-    # Step 1: Extract necessary information from the torrent file
-    tracker_url = torrent[b"announce"].decode()
-    info_hash = hashlib.sha1(Bencode().encode(torrent[b"info"])).digest()
-    peer_id = "40440440440404404040"  # Just an example, this should be unique
-
-    # Step 2: Query the tracker for peers
-    response = requests.get(
-        tracker_url,
-        params={
-            "info_hash": info_hash,
-            "peer_id": peer_id,
-            "port": 6881,
-            "uploaded": 0,
-            "downloaded": 0,
-            "left": torrent[b"info"][b"length"],
-            "compact": 1,
-        },
+        raise ValueError("Invalid encoded value")
+def decode_bencode_string(bencoded_value):
+    first_colon_index = bencoded_value.find(b":")
+    if first_colon_index == -1:
+        raise ValueError("Invalid encoded value")
+    length = first_colon_index + int(bencoded_value[:first_colon_index]) + 1
+    return bencoded_value[first_colon_index + 1 : length], length
+def decode_bencode_int(bencoded_value):
+    end_token_index = bencoded_value.find(b"e")
+    length = end_token_index + 1
+    return int(bencoded_value[1:end_token_index]), length
+def decode_bencode_list(bencoded_value):
+    index, result = 1, []
+    while bencoded_value[index] != ord("e"):
+        decoded_value, length = decode_bencode(bencoded_value[index:])
+        index += length
+        result.append(decoded_value)
+    return result, index + 1
+def decode_bencode_dict(bencoded_value):
+    index, result = 1, {}
+    while bencoded_value[index] != ord("e"):
+        key, length = decode_bencode_string(bencoded_value[index:])
+        index += length
+        value, length = decode_bencode(bencoded_value[index:])
+        index += length
+        result[key.decode()] = value
+    return result, index + 1
+def extract_info_hash(bencoded_value):
+    _, bencoded_value_from_info = bencoded_value.split(b"info")
+    _, dict_length = decode_bencode_dict(bencoded_value_from_info)
+    return bencoded_value_from_info[:dict_length]
+def extract_pieces_hashes(pieces_hashes):
+    index, result = 0, []
+    while index < len(pieces_hashes):
+        result.append(pieces_hashes[index : index + 20].hex())
+        index += 20
+    return result
+def get_peers(decoded_data, info_hash):
+    params = {
+        "info_hash": info_hash,
+        "peer_id": "PC0001-7694471987235",
+        "port": 6881,
+        "uploaded": 0,
+        "downloaded": 0,
+        "left": decoded_data["info"]["length"],
+        "compact": 1,
+    }
+    response = requests.get(decoded_data["announce"].decode(), params=params)
+    return decode_peers(decode_bencode(response.content)[0]["peers"])
+def decode_peers(peers):
+    index, result = 0, []
+    while index < len(peers):
+        ip = ".".join([str(peers[index + offset]) for offset in range(4)])
+        # The port is encoded as a 16-bit big-endian integer.
+        # So, we need to multiply the first byte by 256 and add the second byte.
+        port = peers[index + 4] * 256 + peers[index + 5]
+        result.append(f"{ip}:{port}")
+        index += 6
+    return result
+def get_peer_id(ip, port, info_hash):
+    protocol_name_length = struct.pack(">B", 19)
+    protocol_name = b"BitTorrent protocol"
+    reserved_bytes = b"\x00" * 8
+    peer_id = b"PC0001-7694471987235"
+    payload = (
+        protocol_name_length + protocol_name + reserved_bytes + info_hash + peer_id
     )
-
-    if response.status_code != 200:
-        raise Exception(f"Failed to get peers from tracker: {response.status_code}")
-
-    # Step 3: Decode the response
-    tracker_response = Bencode().decode(response.content)
-    peers = tracker_response[b"peers"]
-
-    peer_list = []
-    while len(peers) >= 6:
-        ip = f"{peers[0]}.{peers[1]}.{peers[2]}.{peers[3]}"
-        port = int.from_bytes(peers[4:6], "big")
-        peer_list.append((ip, port))
-        peers = peers[6:]  # Move to the next peer
-
-    return peer_list
-
-def download_piece(file, piece_index, output_path):
-    # Step 1: Get metadata from the torrent file
-    torrent = metafile(file)
-
-    # Step 2: Get a list of peers from the tracker
-    peers = get_peers(torrent)
-    
-    if not peers:
-        raise Exception("No peers available")
-
-    # Step 3: Try to connect to one of the peers
-    for peer_ip, peer_port in peers:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                client.settimeout(5)
-                print(f"Attempting to connect to peer {peer_ip}:{peer_port}")
-                client.connect((peer_ip, peer_port))
-
-                # Perform handshake and download logic here...
-                # Step 4: Wait for bitfield (message ID 5)
-                bitfield = client.recv(1024)  # Receive and ignore the bitfield for now
-
-                # Step 5: Send interested message (message ID 2)
-                interested_msg = struct.pack("!Ib", 1, 2)
-                client.send(interested_msg)
-
-                # Step 6: Wait for unchoke message (message ID 1)
-                unchoke_msg = client.recv(1024)
-                if unchoke_msg[4] != 1:
-                    raise Exception("Peer did not unchoke")
-
-                # Continue with the rest of the piece downloading steps...
-                
-                break  # If connected and successful, break out of the loop
-        except (ConnectionRefusedError,socket.timeout) as e:
-            print(f"Failed to connect to peer {peer_ip}:{peer_port}, error: {e}")
-            continue
-    else:
-        raise Exception("Could not connect to any peers.")
-
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.connect((ip, port))
+        sock.sendall(payload)
+        response = sock.recv(1024)
+        return response[48:].hex()
+    finally:
+        sock.close()
+def download_piece(decoded_data, info_hash, piece_index, output_file):
+    peers = get_peers(decoded_data, info_hash)
+    peer_ip, peer_port = peers[0].split(":")
+    peer_port = int(peer_port)
+    get_peer_id(peer_ip, peer_port, info_hash)
+    protocol_name_length = struct.pack(">B", 19)
+    protocol_name = b"BitTorrent protocol"
+    reserved_bytes = b"\x00" * 8
+    peer_id = b"PC0001-7694471987235"
+    payload = (
+        protocol_name_length + protocol_name + reserved_bytes + info_hash + peer_id
+    )
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.connect((peer_ip, peer_port))
+        sock.sendall(payload)
+        response = sock.recv(68)
+        message = receive_message(sock)
+        while int(message[4]) != 5:
+            message = receive_message(sock)
+        interested_payload = struct.pack(">IB", 1, 2)
+        sock.sendall(interested_payload)
+        message = receive_message(sock)
+        while int(message[4]) != 1:
+            message = receive_message(sock)
+        file_length = decoded_data["info"]["length"]
+        total_number_of_pieces = len(
+            extract_pieces_hashes(decoded_data["info"]["pieces"])
+        )
+        default_piece_length = decoded_data["info"]["piece length"]
+        if piece_index == total_number_of_pieces - 1:
+            piece_length = file_length - (default_piece_length * piece_index)
+        else:
+            piece_length = default_piece_length
+        number_of_blocks = math.ceil(piece_length / (16 * 1024))
+        data = bytearray()
+        for block_index in range(number_of_blocks):
+            begin = 2**14 * block_index
+            print(f"begin: {begin}")
+            block_length = min(piece_length - begin, 2**14)
+            print(
+                f"Requesting block {block_index + 1} of {number_of_blocks} with length {block_length}"
+            )
+            request_payload = struct.pack(
+                ">IBIII", 13, 6, piece_index, begin, block_length
+            )
+            print("Requesting block, with payload:")
+            print(request_payload)
+            print(struct.unpack(">IBIII", request_payload))
+            print(int.from_bytes(request_payload[:4]))
+            print(int.from_bytes(request_payload[4:5]))
+            print(int.from_bytes(request_payload[5:9]))
+            print(int.from_bytes(request_payload[17:21]))
+            sock.sendall(request_payload)
+            message = receive_message(sock)
+            data.extend(message[13:])
+        with open(output_file, "wb") as f:
+            f.write(data)
+    finally:
+        sock.close()
+    return True
+def receive_message(s):
+    length = s.recv(4)
+    while not length or not int.from_bytes(length):
+        length = s.recv(4)
+    message = s.recv(int.from_bytes(length))
+    # If we didn't receive the full message for some reason, keep gobbling.
+    while len(message) < int.from_bytes(length):
+        message += s.recv(int.from_bytes(length) - len(message))
+    return length + message
 def main():
     command = sys.argv[1]
-    if command == "decode":
-        bencoded_value = sys.argv[2].encode()
-        # json.dumps() can't handle bytes, but bencoded "strings" need to be
-        # bytestrings since they might contain non utf-8 characters.
-        #
-        # Let's convert them to strings for printing to the console.
-        def bytes_to_str(data):
-            if isinstance(data, bytes):
-                return data.decode()
-            raise TypeError(f"Type not serializable: {type(data)}")
-        # Uncomment this block to pass the first stage
-        print(json.dumps(decode_bencode(bencoded_value), default=bytes_to_str))
-    elif command == "info":
-        content_decoded = metafile(sys.argv[2])
-        print("Tracker URL:", content_decoded[b"announce"].decode())
-        print("Length:", content_decoded[b"info"][b"length"])
-        print(
-            "Info Hash:",
-            hashlib.sha1(Bencode().encode(content_decoded[b"info"])).hexdigest(),
-        )
-        print("Piece Length:", content_decoded[b"info"][b"piece length"])
-        print("Piece Hashes:")
-        for ph in range(0, len(content_decoded[b"info"][b"pieces"]), 20):
-            print(content_decoded[b"info"][b"pieces"][ph : ph + 20].hex())
-    elif command == "peers":
-        content_decoded = metafile(sys.argv[2])
-        reply = requests.get(
-            content_decoded[b"announce"].decode(),
-            params={
-                "info_hash": hashlib.sha1(
-                    Bencode().encode(content_decoded[b"info"])
-                ).digest(),
-                "peer_id": "40440440440404404040",
-                "port": 6881,
-                "uploaded": 0,
-                "downloaded": 0,
-                "left": content_decoded[b"info"][b"length"],
-                "compact": 1,
-            },
-        )
-        decoded_reply = Bencode().decode(reply.content)
-        peers_list = decoded_reply[b"peers"]
-        while len(peers_list) > 0:
-            ip_addr = (
-                str(peers_list[0])
-                + "."
-                + str(peers_list[1])
-                + "."
-                + str(peers_list[2])
-                + "."
-                + str(peers_list[3])
+    match command:
+        case "decode":
+            bencoded_value = sys.argv[2].encode()
+            # json.dumps() can't handle bytes, but bencoded "strings" need to be
+            # bytestrings since they might contain non utf-8 characters.
+            #
+            # Here we convert them to strings for printing to the console.
+            def bytes_to_str(data):
+                if isinstance(data, bytes):
+                    return data.decode()
+                raise TypeError(f"Type not serializable: {type(data)}")
+            print(json.dumps(decode_bencode(bencoded_value)[0], default=bytes_to_str))
+        case "info":
+            torrent_file = sys.argv[2]
+            with open(torrent_file, "rb") as f:
+                torrent_data = f.read()
+            decoded_data = decode_bencode(torrent_data)[0]
+            print(f"Tracker URL: {decoded_data['announce'].decode()}")
+            print(f"Length: {decoded_data['info']['length']}")
+            print(
+                f"Info Hash: {hashlib.sha1(extract_info_hash(torrent_data)).hexdigest()}"
             )
-            port = int.from_bytes(peers_list[4:6], "big")
-            print(ip_addr + ":" + str(port))
-            peers_list = peers_list[6:]
-    
-    elif command == "handshake":
-        content_decoded = metafile(sys.argv[2])
-        info_hash = hashlib.sha1(Bencode().encode(content_decoded[b"info"])).digest()
-        addr = sys.argv[3].split(":")
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect((addr[0], int(addr[1])))
-
-            # Reserved bytes - 8 bytes of zeros
-            reserved_bytes = b'\x00\x00\x00\x00\x00\x00\x00\x00'
-
-            # Peer ID (you can adjust this as necessary, but it should be 20 bytes)
-            peer_id = b'-PC0001-' + b'123456789012'  # Example of a 20-byte peer ID
-
-            # Send handshake message
-            client.send(
-                chr(19).encode()                          # Protocol string length
-                + b"BitTorrent protocol"                  # Protocol identifier
-                + reserved_bytes                          # Reserved bytes
-                + info_hash                               # Info hash
-                + peer_id                                 # Peer ID
+            print(f"Piece Length: {decoded_data['info']['piece length']}")
+            print(
+                f"Piece Hashes: {extract_pieces_hashes(decoded_data['info']['pieces'])}"
             )
-
-            # Receive and process the reply
-            reply = client.recv(68)
-
-        # Extract and print Peer ID from the reply (20 bytes starting from byte 48)
-        peer_id_received = reply[48:68].hex()  # Convert Peer ID to hex string for correct output
-        print("Peer ID:", peer_id_received)
-    elif command == "download_piece":
-        if sys.argv[2] == "-o":
-            output_path = sys.argv[3]
-            torrent_file = sys.argv[4]
+        case "peers":
+            torrent_file = sys.argv[2]
+            with open(torrent_file, "rb") as f:
+                torrent_data = f.read()
+            decoded_data = decode_bencode(torrent_data)[0]
+            for peer in get_peers(
+                decoded_data, hashlib.sha1(extract_info_hash(torrent_data)).digest()
+            ):
+                print(peer)
+        case "handshake":
+            peer_ip, peer_port = sys.argv[3].split(":")
+            torrent_file = sys.argv[2]
+            with open(torrent_file, "rb") as f:
+                torrent_data = f.read()
+            decoded_data = decode_bencode(torrent_data)[0]
+            print(
+                f"Peer ID: {get_peer_id(peer_ip, int(peer_port), hashlib.sha1(extract_info_hash(torrent_data)).digest())}"
+            )
+        case "download_piece":
+            output_file = sys.argv[3]
             piece_index = int(sys.argv[5])
-        else:
-            print("Usage: download_piece -o <output_path> <torrent_file> <piece_index>")
-            return
-        
-        download_piece(torrent_file, piece_index, output_path)
-    else:
-        raise NotImplementedError(f"Unknown command {command}")
+            torrent_file = sys.argv[4]
+            with open(torrent_file, "rb") as f:
+                torrent_data = f.read()
+            decoded_data = decode_bencode(torrent_data)[0]
+            if download_piece(
+                decoded_data,
+                hashlib.sha1(extract_info_hash(torrent_data)).digest(),
+                piece_index,
+                output_file,
+            ):
+                print(f"Piece {piece_index} downloaded to {output_file}.")
+            else:
+                raise RuntimeError("Failed to download piece")
+        case _:
+            raise NotImplementedError(f"Unknown command {command}")
 if __name__ == "__main__":
     main()
