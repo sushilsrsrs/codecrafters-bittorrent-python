@@ -5,6 +5,7 @@ import hashlib
 import textwrap
 import requests  # - available if you need it!
 import socket
+import struct
 # Examples:
 #
 # - decode_bencode(b"5:hello") -> b"hello"
@@ -37,6 +38,61 @@ def metafile(file):
         content = metafile.read()
         content_decoded = Bencode().decode(content)
     return content_decoded
+def download_piece(file, piece_index, output_path):
+    # Step 1: Get metadata from the torrent file
+    torrent = metafile(file)
+    tracker_url = torrent[b"announce"].decode()
+
+    # Step 2: Connect to a peer (use the logic you've implemented in previous stages)
+    peer_ip = "127.0.0.1"  # Placeholder; get this from the tracker response
+    peer_port = 6881       # Placeholder; get this from the tracker response
+    piece_length = torrent[b"info"][b"piece length"]
+    total_length = torrent[b"info"][b"length"]
+    piece_hashes = torrent[b"info"][b"pieces"]
+
+    # Step 3: Perform the handshake (already implemented)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+        client.connect((peer_ip, peer_port))
+        # Send handshake...
+        # Receive handshake...
+
+        # Step 4: Wait for bitfield (message ID 5)
+        bitfield = client.recv(1024)  # Receive and ignore the bitfield for now
+
+        # Step 5: Send interested message (message ID 2)
+        interested_msg = struct.pack("!Ib", 1, 2)
+        client.send(interested_msg)
+
+        # Step 6: Wait for unchoke message (message ID 1)
+        unchoke_msg = client.recv(1024)
+        if unchoke_msg[4] != 1:
+            raise Exception("Peer did not unchoke")
+
+        # Step 7: Request blocks from the piece
+        block_size = 16 * 1024
+        piece_data = b""
+        for begin in range(0, piece_length, block_size):
+            block_len = min(block_size, piece_length - begin)
+            request_msg = struct.pack("!IbbIII", 13, 6, piece_index, begin, block_len)
+            client.send(request_msg)
+
+            # Step 8: Receive the piece message (ID 7)
+            piece_msg = client.recv(1024 + block_len)
+            index = struct.unpack("!I", piece_msg[5:9])[0]
+            offset = struct.unpack("!I", piece_msg[9:13])[0]
+            block = piece_msg[13:]
+
+            piece_data += block
+
+        # Step 9: Verify the piece's hash
+        piece_hash = hashlib.sha1(piece_data).digest()
+        expected_hash = piece_hashes[piece_index*20:(piece_index+1)*20]
+        if piece_hash != expected_hash:
+            raise Exception("Piece hash mismatch!")
+
+        # Step 10: Save the piece to disk
+        with open(output_path, "wb") as f:
+            f.write(piece_data)
 def main():
     command = sys.argv[1]
     if command == "decode":
@@ -123,7 +179,11 @@ def main():
         # Extract and print Peer ID from the reply (20 bytes starting from byte 48)
         peer_id_received = reply[48:68].hex()  # Convert Peer ID to hex string for correct output
         print("Peer ID:", peer_id_received)
-
+    elif command == "download_piece":
+        torrent_file = sys.argv[2]
+        piece_index = int(sys.argv[3])
+        output_path = sys.argv[4]
+        download_piece(torrent_file, piece_index, output_path)
     else:
         raise NotImplementedError(f"Unknown command {command}")
 if __name__ == "__main__":
