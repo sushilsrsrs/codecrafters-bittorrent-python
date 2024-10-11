@@ -88,6 +88,7 @@ def download_piece(file, piece_index, output_path):
     for peer_ip, peer_port in peers:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.settimeout(5)
                 print(f"Attempting to connect to peer {peer_ip}:{peer_port}")
                 client.connect((peer_ip, peer_port))
 
@@ -107,8 +108,8 @@ def download_piece(file, piece_index, output_path):
                 # Continue with the rest of the piece downloading steps...
                 
                 break  # If connected and successful, break out of the loop
-        except ConnectionRefusedError:
-            print(f"Connection to peer {peer_ip}:{peer_port} refused, trying next peer...")
+        except (ConnectionRefusedError,socket.timeout) as e:
+            print(f"Failed to connect to peer {peer_ip}:{peer_port}, error: {e}")
             continue
     else:
         raise Exception("Could not connect to any peers.")
