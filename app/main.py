@@ -38,61 +38,81 @@ def metafile(file):
         content = metafile.read()
         content_decoded = Bencode().decode(content)
     return content_decoded
+def get_peers(torrent):
+    # Step 1: Extract necessary information from the torrent file
+    tracker_url = torrent[b"announce"].decode()
+    info_hash = hashlib.sha1(Bencode().encode(torrent[b"info"])).digest()
+    peer_id = "40440440440404404040"  # Just an example, this should be unique
+
+    # Step 2: Query the tracker for peers
+    response = requests.get(
+        tracker_url,
+        params={
+            "info_hash": info_hash,
+            "peer_id": peer_id,
+            "port": 6881,
+            "uploaded": 0,
+            "downloaded": 0,
+            "left": torrent[b"info"][b"length"],
+            "compact": 1,
+        },
+    )
+
+    if response.status_code != 200:
+        raise Exception(f"Failed to get peers from tracker: {response.status_code}")
+
+    # Step 3: Decode the response
+    tracker_response = Bencode().decode(response.content)
+    peers = tracker_response[b"peers"]
+
+    peer_list = []
+    while len(peers) >= 6:
+        ip = f"{peers[0]}.{peers[1]}.{peers[2]}.{peers[3]}"
+        port = int.from_bytes(peers[4:6], "big")
+        peer_list.append((ip, port))
+        peers = peers[6:]  # Move to the next peer
+
+    return peer_list
+
 def download_piece(file, piece_index, output_path):
     # Step 1: Get metadata from the torrent file
     torrent = metafile(file)
-    tracker_url = torrent[b"announce"].decode()
 
-    # Step 2: Connect to a peer (use the logic you've implemented in previous stages)
-    peer_ip = "127.0.0.1"  # Placeholder; get this from the tracker response
-    peer_port = 6881       # Placeholder; get this from the tracker response
-    piece_length = torrent[b"info"][b"piece length"]
-    total_length = torrent[b"info"][b"length"]
-    piece_hashes = torrent[b"info"][b"pieces"]
+    # Step 2: Get a list of peers from the tracker
+    peers = get_peers(torrent)
+    
+    if not peers:
+        raise Exception("No peers available")
 
-    # Step 3: Perform the handshake (already implemented)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-        client.connect((peer_ip, peer_port))
-        # Send handshake...
-        # Receive handshake...
+    # Step 3: Try to connect to one of the peers
+    for peer_ip, peer_port in peers:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                print(f"Attempting to connect to peer {peer_ip}:{peer_port}")
+                client.connect((peer_ip, peer_port))
 
-        # Step 4: Wait for bitfield (message ID 5)
-        bitfield = client.recv(1024)  # Receive and ignore the bitfield for now
+                # Perform handshake and download logic here...
+                # Step 4: Wait for bitfield (message ID 5)
+                bitfield = client.recv(1024)  # Receive and ignore the bitfield for now
 
-        # Step 5: Send interested message (message ID 2)
-        interested_msg = struct.pack("!Ib", 1, 2)
-        client.send(interested_msg)
+                # Step 5: Send interested message (message ID 2)
+                interested_msg = struct.pack("!Ib", 1, 2)
+                client.send(interested_msg)
 
-        # Step 6: Wait for unchoke message (message ID 1)
-        unchoke_msg = client.recv(1024)
-        if unchoke_msg[4] != 1:
-            raise Exception("Peer did not unchoke")
+                # Step 6: Wait for unchoke message (message ID 1)
+                unchoke_msg = client.recv(1024)
+                if unchoke_msg[4] != 1:
+                    raise Exception("Peer did not unchoke")
 
-        # Step 7: Request blocks from the piece
-        block_size = 16 * 1024
-        piece_data = b""
-        for begin in range(0, piece_length, block_size):
-            block_len = min(block_size, piece_length - begin)
-            request_msg = struct.pack("!IbbIII", 13, 6, piece_index, begin, block_len)
-            client.send(request_msg)
+                # Continue with the rest of the piece downloading steps...
+                
+                break  # If connected and successful, break out of the loop
+        except ConnectionRefusedError:
+            print(f"Connection to peer {peer_ip}:{peer_port} refused, trying next peer...")
+            continue
+    else:
+        raise Exception("Could not connect to any peers.")
 
-            # Step 8: Receive the piece message (ID 7)
-            piece_msg = client.recv(1024 + block_len)
-            index = struct.unpack("!I", piece_msg[5:9])[0]
-            offset = struct.unpack("!I", piece_msg[9:13])[0]
-            block = piece_msg[13:]
-
-            piece_data += block
-
-        # Step 9: Verify the piece's hash
-        piece_hash = hashlib.sha1(piece_data).digest()
-        expected_hash = piece_hashes[piece_index*20:(piece_index+1)*20]
-        if piece_hash != expected_hash:
-            raise Exception("Piece hash mismatch!")
-
-        # Step 10: Save the piece to disk
-        with open(output_path, "wb") as f:
-            f.write(piece_data)
 def main():
     command = sys.argv[1]
     if command == "decode":
