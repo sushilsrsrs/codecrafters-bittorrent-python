@@ -180,9 +180,14 @@ def main():
         peer_id_received = reply[48:68].hex()  # Convert Peer ID to hex string for correct output
         print("Peer ID:", peer_id_received)
     elif command == "download_piece":
-        torrent_file = sys.argv[2]
-        piece_index = int(sys.argv[3])
-        output_path = sys.argv[4]
+        if sys.argv[2] == "-o":
+            output_path = sys.argv[3]
+            torrent_file = sys.argv[4]
+            piece_index = int(sys.argv[5])
+        else:
+            print("Usage: download_piece -o <output_path> <torrent_file> <piece_index>")
+            return
+        
         download_piece(torrent_file, piece_index, output_path)
     else:
         raise NotImplementedError(f"Unknown command {command}")
