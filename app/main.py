@@ -11,17 +11,26 @@ import socket
 # - decode_bencode(b"10:hello12345") -> b"hello12345"
 def decode_bencode(bencoded_value):
     ctrl_char_begin = bencoded_value[0]
-    ctrl_char_end = bencoded_value[:-1]
+
+    # If it's a string (starts with a number)
     if chr(ctrl_char_begin).isdigit():
-        length = int(bencoded_value.split(b":")[0])
-        return bencoded_value.split(b":")[1][:length]
+        # Extract the length of the string before the colon
+        length, rest = bencoded_value.split(b":", 1)
+        length = int(length)  # Convert length to an integer
+        # Return the string portion with the exact length
+        return rest[:length]
+    
     elif chr(ctrl_char_begin) == "i":
+        # For integer
         return int(bencoded_value[1:-1])
+    
     elif chr(ctrl_char_begin) in ("l", "d"):
-        # Lazy solution
+        # Use Bencode decoder for lists and dictionaries
         return Bencode(encoding="utf-8").decode(bencoded_value)
+    
     else:
         raise NotImplementedError("This data type is unsupported for now")
+
 def metafile(file):
     content_decoded = ""
     with open(file, "rb") as metafile:
