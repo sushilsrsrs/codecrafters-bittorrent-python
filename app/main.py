@@ -113,7 +113,7 @@ def main():
 
         # Extract and print Peer ID from the reply (20 bytes starting from byte 48)
         peer_id_received = reply[48:68].hex()  # Convert Peer ID to hex string for correct output
-        print(b"Peer ID:", peer_id_received)
+        print("Peer ID:", peer_id_received)
 
     else:
         raise NotImplementedError(f"Unknown command {command}")
