@@ -85,6 +85,7 @@ def main():
             port = int.from_bytes(peers_list[4:6], "big")
             print(ip_addr + ":" + str(port))
             peers_list = peers_list[6:]
+    
     elif command == "handshake":
         content_decoded = metafile(sys.argv[2])
         info_hash = hashlib.sha1(Bencode().encode(content_decoded[b"info"])).digest()
@@ -92,10 +93,10 @@ def main():
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((addr[0], int(addr[1])))
 
-            # Correct reserved bytes (all 0s)
+            # Reserved bytes - 8 bytes of zeros
             reserved_bytes = b'\x00\x00\x00\x00\x00\x00\x00\x00'
 
-            # Peer ID can be any 20-byte string, let's fix it to match BitTorrent's requirement
+            # Peer ID (you can adjust this as necessary, but it should be 20 bytes)
             peer_id = b'-PC0001-' + b'123456789012'  # Example of a 20-byte peer ID
 
             # Send handshake message
@@ -109,10 +110,11 @@ def main():
 
             # Receive and process the reply
             reply = client.recv(68)
-        
+
         # Extract and print Peer ID from the reply (20 bytes starting from byte 48)
-        peer_id_received = reply[48:68].decode('utf-8', errors='ignore')
-        print("Peer ID:", peer_id_received)
+        peer_id_received = reply[48:68].hex()  # Convert Peer ID to hex string for correct output
+        print(b"Peer ID:", peer_id_received)
+
     else:
         raise NotImplementedError(f"Unknown command {command}")
 if __name__ == "__main__":
