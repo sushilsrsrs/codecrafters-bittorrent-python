@@ -91,14 +91,28 @@ def main():
         addr = sys.argv[3].split(":")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((addr[0], int(addr[1])))
+
+            # Correct reserved bytes (all 0s)
+            reserved_bytes = b'\x00\x00\x00\x00\x00\x00\x00\x00'
+
+            # Peer ID can be any 20-byte string, let's fix it to match BitTorrent's requirement
+            peer_id = b'-PC0001-' + b'123456789012'  # Example of a 20-byte peer ID
+
+            # Send handshake message
             client.send(
-                chr(19).encode()
-                + b"BitTorrent protocol00000000"
-                + info_hash
-                + "40440440440404404040".encode()
+                chr(19).encode()                          # Protocol string length
+                + b"BitTorrent protocol"                  # Protocol identifier
+                + reserved_bytes                          # Reserved bytes
+                + info_hash                               # Info hash
+                + peer_id                                 # Peer ID
             )
-            reply = client.recv(70)
-        print("Peer ID:", reply[48:].hex())
+
+            # Receive and process the reply
+            reply = client.recv(68)
+        
+        # Extract and print Peer ID from the reply (20 bytes starting from byte 48)
+        peer_id_received = reply[48:68].decode('utf-8', errors='ignore')
+        print("Peer ID:", peer_id_received)
     else:
         raise NotImplementedError(f"Unknown command {command}")
 if __name__ == "__main__":
